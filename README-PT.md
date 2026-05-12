@@ -1,73 +1,100 @@
-# Broker Market Data API 📈
+# Broker Market Data API
 
-Este microserviço é o componente responsável por alimentar o ecossistema do projeto **My Broker B3** com dados reais do mercado financeiro brasileiro. Ele atua como um ingestor que consome informações da API externa Brapi e as distribui para persistência histórica e publicação dos preços em tópico Kafka para atualização das bases.
+Microservico responsavel por alimentar o ecossistema **My Broker B3** com dados reais do mercado financeiro brasileiro. Busca cotacoes de ativos na API Brapi, persiste o historico no MongoDB e publica eventos em um topico Kafka para os servicos consumidores.
 
-## 🏗️ Arquitetura e Fluxo
+> Este servico faz parte de uma serie de artigos documentando o ecossistema **My Broker B3**.
+> Acompanhe a serie completa em [dev.to/rvneto](https://dev.to/rvneto).
 
-Conforme o desenho técnico do sistema, este serviço realiza o seguinte fluxo de dados:
+---
 
-1.  **Ingestão**: O Worker percorre uma Watchlist de 50 ativos (Blue Chips, FIIs e ETFs).
-2.  **Consumo**: Realiza requisições individuais à API Brapi, respeitando o limite de um ativo por chamada do plano gratuito.
-3.  **Persistência Histórica**: Armazena o payload completo no **MongoDB** (`broker_market_data_db`) para futuras análises e auditoria.
-4.  **Publicação em Tópico Kafka**: Publica mensagens com as informações atualizadas dos preços no tópico `trading-assets-market-data-v1` que depois serão consumidas pelos demais serviços.
+## Arquitetura e Fluxo
 
-## 🚀 Tecnologias
-
-- **Python 3.12+**
-- **MongoDB**: Banco orientado a documentos para histórico de preços.
-- **Brapi API**: Fonte de dados real-time para ativos da B3.
-- **Apache Kafka**: Para comunicação assíncrona entre serviços.
-- **Schedule**: Biblioteca para orquestração de tarefas periódicas.
-
-## 🛠️ Configuração do Ambiente
-
-### Variáveis de Ambiente
-
-Crie um arquivo `.env` na raiz do diretório com as seguintes configurações:
-
-```env
-BRAPI_TOKEN=seu_token_aqui
-MONGO_HOST=localhost
-MONGO_PORT=27017
-MONGO_DB=market_data_db
+```
+[Brapi API] ---> [broker-market-data-api] ---> [MongoDB: price_history]
+                         |
+                         +---> [Kafka: trading-assets-market-data-v1]
+                                        |
+                              [broker-asset-api] (consumer)
 ```
 
-### Instalação
+1. **Ingestao**: Worker itera uma watchlist de 50 ativos (Blue Chips, FIIs, ETFs)
+2. **Busca**: Requisicoes individuais a API Brapi respeitando o rate limit do plano gratuito
+3. **Persistencia**: Payload completo armazenado no MongoDB para analise historica e auditoria
+4. **Streaming**: Eventos de preco publicados no Kafka para os consumidores downstream
+5. **Agendamento**: Executa a cada 30 minutos (configuravel), roda imediatamente ao iniciar
 
-1. **Ambiente Virtual**:
+---
+
+## Stack Tecnologica
+
+| Tecnologia | Uso |
+| :--- | :--- |
+| **Python 3.12+** | Runtime do servico |
+| **MongoDB** | Persistencia historica de precos |
+| **Apache Kafka** (confluent-kafka) | Streaming assincrono de eventos |
+| **Brapi API** | Fonte de dados reais da B3 |
+| **Schedule** | Orquestracao de tarefas periodicas |
+
+---
+
+## Payload Kafka
+
+**Topico:** `trading-assets-market-data-v1`
+**Key:** simbolo do ativo (ex: `PETR4`)
+
+```json
+{
+  "ticker": "PETR4",
+  "name": "Petroleo Brasileiro S.A. - Petrobras",
+  "short_name": "PETROBRAS PN",
+  "price": 35.50,
+  "volume": 15234567,
+  "updated_at": 1714234567
+}
+```
+
+---
+
+## Variaveis de Ambiente
+
+| Variavel | Descricao | Padrao |
+| :--- | :--- | :--- |
+| **BRAPI_TOKEN** | Token da API Brapi (obrigatorio) | — |
+| **MONGO_HOST** | Host do MongoDB | localhost |
+| **MONGO_PORT** | Porta do MongoDB | 27017 |
+| **MONGO_DB** | Nome do banco MongoDB | market_data_db |
+| **KAFKA_BOOTSTRAP_SERVERS** | Endereco do broker Kafka | localhost:9092 |
+| **KAFKA_TOPIC** | Topico Kafka para publicacao | trading-assets-market-data-v1 |
+| **SYNC_INTERVAL_MINUTES** | Intervalo de sincronizacao em minutos | 30 |
+
+> **BRAPI_TOKEN** nao possui valor padrao e deve ser fornecido explicitamente.
+
+---
+
+## Configuracao Local
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\activate
-
-```
-
-2. **Dependências**:
-
-```powershell
 pip install -r requirements.txt
-
-```
-
-## 🏃 Execução
-
-Para iniciar o Worker de monitoramento:
-
-```powershell
+cp .env.example .env   # preencha seu BRAPI_TOKEN
 python main.py
-
 ```
 
-O serviço está configurado para atualizar a lista completa a cada **30 minutos**, respeitando a frequência de atualização dos dados e os limites de requisições do plano gratuito da Brapi.
+## Rodando com Docker
 
-## 📊 Estrutura do Cache (Redis)
+```bash
+docker build -t broker-market-data-api .
+```
 
-Os dados são disponibilizados para os outros microserviços do ecossistema no seguinte formato:
-
-- **Padrão da Chave**: `ticker:price:{SYMBOL}` (ex: `ticker:price:PETR4`)
-- **Tipo de Dado**: `HASH`
-- **Campos**: `symbol`, `price`, `volume`, `timestamp`, `created_at`.
+```bash
+docker run \
+  -e BRAPI_TOKEN=seu_token_aqui \
+  -e MONGO_HOST=broker-market-data-db \
+  -e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
+  broker-market-data-api
+```
 
 ---
 
-_Este projeto faz parte do ecossistema My Broker B3 para estudos de arquitetura de microserviços._
+*Este projeto faz parte do ecossistema My Broker B3 para estudos de arquitetura de microservicos.*
